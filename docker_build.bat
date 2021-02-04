@@ -1,1 +1,1 @@
-docker build -t haseong/deepo:v2.2 .
+docker build -t haseong/deepo:v0.1 .
