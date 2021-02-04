@@ -1,124 +1,339 @@
+# ==================================================================
+# module list
+# ------------------------------------------------------------------
+# darknet       latest (git)
+# python        3.6    (apt)
+# torch         latest (git)
+# chainer       latest (pip)
+# jupyter       latest (pip)
+# mxnet         latest (pip)
+# onnx          latest (pip)
+# paddle        latest (pip)
+# pytorch       latest (pip)
+# tensorflow    latest (pip)
+# theano        latest (git)
+# jupyterlab    latest (pip)
+# keras         latest (pip)
+# lasagne       latest (git)
+# opencv        4.5.1  (git)
+# sonnet        latest (pip)
+# caffe         latest (git)
+# cntk          latest (pip)
+# ==================================================================
+
 FROM ubuntu:18.04
+ENV LANG C.UTF-8
+RUN APT_INSTALL="apt-get install -y --no-install-recommends" && \
+    PIP_INSTALL="python -m pip --no-cache-dir install --upgrade" && \
+    GIT_CLONE="git clone --depth 10" && \
 
-# Supress warnings about missing front-end. As recommended at:
-# http://stackoverflow.com/questions/22466255/is-it-possibe-to-answer-dialog-questions-when-installing-under-docker
-ARG DEBIAN_FRONTEND=noninteractive
+    rm -rf /var/lib/apt/lists/* \
+           /etc/apt/sources.list.d/cuda.list \
+           /etc/apt/sources.list.d/nvidia-ml.list && \
 
-# Essentials: developer tools, build tools, OpenBLAS
-RUN apt-get update && apt-get install -y --no-install-recommends \
-		apt-utils git curl vim unzip openssh-client wget \
-		build-essential cmake \
-		libopenblas-dev
+    apt-get update && \
 
-#
-# Python 3.5
-#
-# For convenience, alias (but don't sym-link) python & pip to python3 & pip3 as recommended in:
-# http://askubuntu.com/questions/351318/changing-symlink-python-to-python3-causes-problems
-RUN apt-get install -y --no-install-recommends python3.5 python3.5-dev python3-pip python3-tk && \
-pip3 install --no-cache-dir --upgrade pip setuptools && \
-echo "alias python='python3'" >> /root/.bash_aliases && \
-echo "alias pip='pip3'" >> /root/.bash_aliases
-# Pillow and it's dependencies
-RUN apt-get install -y --no-install-recommends libjpeg-dev zlib1g-dev && \
-pip3 --no-cache-dir install Pillow
-# Science libraries and other common packages
-RUN pip3 --no-cache-dir install \
-numpy scipy sklearn scikit-image pandas matplotlib Cython requests
+# ==================================================================
+# tools
+# ------------------------------------------------------------------
 
-#
-# Jupyter Notebook
-#
-# Allow access from outside the container, and skip trying to open a browser.
-# NOTE: disable authentication token for convenience. DON'T DO THIS ON A PUBLIC SERVER.
-RUN pip3 --no-cache-dir install jupyter && \
-mkdir /root/.jupyter && \
-echo "c.NotebookApp.ip = '*'" \
-"\nc.NotebookApp.open_browser = False" \
-"\nc.NotebookApp.token = ''" \
-> /root/.jupyter/jupyter_notebook_config.py
-EXPOSE 8888
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        build-essential \
+        apt-utils \
+        ca-certificates \
+        wget \
+        git \
+        vim \
+        libssl-dev \
+        curl \
+        unzip \
+        unrar \
+        && \
 
-#
-# Tensorflow 1.6.0 - CPU
-#
-RUN pip3 install --no-cache-dir --upgrade tensorflow 
+    $GIT_CLONE https://github.com/Kitware/CMake ~/cmake && \
+    cd ~/cmake && \
+    ./bootstrap && \
+    make -j"$(nproc)" install && \
 
-# Expose port for TensorBoard
-EXPOSE 6006
+# ==================================================================
+# darknet
+# ------------------------------------------------------------------
 
-#
-# OpenCV 3.4.1
-#
-# Dependencies
-RUN apt-get install -y --no-install-recommends \
-libjpeg8-dev libtiff5-dev libjasper-dev libpng12-dev \
-libavcodec-dev libavformat-dev libswscale-dev libv4l-dev libgtk2.0-dev \
-liblapacke-dev checkinstall
-# Get source from github
-RUN git clone -b 3.4.1 --depth 1 https://github.com/opencv/opencv.git /usr/local/src/opencv
-# Compile
-RUN cd /usr/local/src/opencv && mkdir build && cd build && \
-cmake -D CMAKE_INSTALL_PREFIX=/usr/local \
--D BUILD_TESTS=OFF \
--D BUILD_PERF_TESTS=OFF \
--D PYTHON_DEFAULT_EXECUTABLE=$(which python3) \
-.. && \
-make -j"$(nproc)" && \
-make install
+    $GIT_CLONE https://github.com/pjreddie/darknet.git ~/darknet && \
+    cd ~/darknet && \
+    sed -i 's/GPU=0/GPU=0/g' ~/darknet/Makefile && \
+    sed -i 's/CUDNN=0/CUDNN=0/g' ~/darknet/Makefile && \
+    make -j"$(nproc)" && \
+    cp ~/darknet/include/* /usr/local/include && \
+    cp ~/darknet/*.a /usr/local/lib && \
+    cp ~/darknet/*.so /usr/local/lib && \
+    cp ~/darknet/darknet /usr/local/bin && \
 
-#
-# Caffe
-#
-# Dependencies
-RUN apt-get install -y --no-install-recommends \
-cmake libprotobuf-dev libleveldb-dev libsnappy-dev libopencv-dev \
-libhdf5-serial-dev protobuf-compiler liblmdb-dev libgoogle-glog-dev \
-libboost-all-dev && \
-pip3 install lmdb
-# Get source. Use master branch because the latest stable release (rc3) misses critical fixes.
-RUN git clone -b master --depth 1 https://github.com/BVLC/caffe.git /usr/local/src/caffe
-# Python dependencies
-RUN pip3 --no-cache-dir install -r /usr/local/src/caffe/python/requirements.txt
-# Compile
-RUN cd /usr/local/src/caffe && mkdir build && cd build && \
-cmake -D CPU_ONLY=ON -D python_version=3 -D BLAS=open -D USE_OPENCV=ON .. && \
-make -j"$(nproc)" all && \
-make install
-# Enivronment variables
-ENV PYTHONPATH=/usr/local/src/caffe/python:$PYTHONPATH \
-PATH=/usr/local/src/caffe/build/tools:$PATH
-# Fix: old version of python-dateutil breaks caffe. Update it.
-RUN pip3 install --no-cache-dir python-dateutil --upgrade
+# ==================================================================
+# python
+# ------------------------------------------------------------------
 
-#
-# Java
-#
-# Install JDK (Java Development Kit), which includes JRE (Java Runtime
-# Environment). Or, if you just want to run Java apps, you can install
-# JRE only using: apt install default-jre
-RUN apt-get install -y --no-install-recommends default-jdk
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        software-properties-common \
+        && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        python3.6 \
+        python3.6-dev \
+        python3-distutils-extra \
+        && \
+    wget -O ~/get-pip.py \
+        https://bootstrap.pypa.io/get-pip.py && \
+    python3.6 ~/get-pip.py && \
+    ln -s /usr/bin/python3.6 /usr/local/bin/python3 && \
+    ln -s /usr/bin/python3.6 /usr/local/bin/python && \
+    $PIP_INSTALL \
+        setuptools \
+        && \
+    $PIP_INSTALL \
+        numpy \
+        scipy \
+        pandas \
+        cloudpickle \
+        scikit-image>=0.14.2 \
+        scikit-learn \
+        matplotlib \
+        Cython \
+        tqdm \
+        && \
 
-#
-# Keras 2.1.5
-#
-RUN pip3 install --no-cache-dir --upgrade h5py pydot_ng keras
+# ==================================================================
+# torch
+# ------------------------------------------------------------------
 
-#
-# PyTorch 0.3.1
-#
-RUN pip3 install http://download.pytorch.org/whl/cpu/torch-0.3.1-cp35-cp35m-linux_x86_64.whl && \
-   pip3 install torchvision
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        sudo \
+        && \
 
-RUN pip3 install biopython
+    $GIT_CLONE https://github.com/nagadomi/distro.git ~/torch --recursive && \
+    cd ~/torch && \
+    bash install-deps && \
+    sed -i 's/${THIS_DIR}\/install/\/usr\/local/g' ./install.sh && \
+    ./install.sh && \
 
-#
-# PyCocoTools
-#
-# Using a fork of the original that has a fix for Python 3.
-# I submitted a PR to the original repo (https://github.com/cocodataset/cocoapi/pull/50)
-# but it doesn't seem to be active anymore.
-   RUN pip3 install --no-cache-dir git+https://github.com/waleedka/coco.git#subdirectory=PythonAPI
+# ==================================================================
+# boost
+# ------------------------------------------------------------------
 
-   WORKDIR "/root"
-   CMD ["/bin/bash"]
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        libboost-all-dev \
+        && \
+
+# ==================================================================
+# chainer
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        chainer \
+        && \
+
+# ==================================================================
+# jupyter
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        jupyter \
+        && \
+
+# ==================================================================
+# mxnet
+# ------------------------------------------------------------------
+
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        libatlas-base-dev \
+        graphviz \
+        && \
+
+    $PIP_INSTALL \
+        mxnet \
+        graphviz \
+        && \
+
+# ==================================================================
+# onnx
+# ------------------------------------------------------------------
+
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        protobuf-compiler \
+        libprotoc-dev \
+        && \
+
+    $PIP_INSTALL \
+        --no-binary onnx onnx \
+        && \
+
+    $PIP_INSTALL \
+        onnxruntime \
+        && \
+
+# ==================================================================
+# paddle
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        paddlepaddle \
+        && \
+
+# ==================================================================
+# pytorch
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        future \
+        numpy \
+        protobuf \
+        enum34 \
+        pyyaml \
+        typing \
+        && \
+    $PIP_INSTALL \
+        --pre torch torchvision -f \
+        https://download.pytorch.org/whl/nightly/cpu/torch_nightly.html \
+        && \
+
+# ==================================================================
+# tensorflow
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        tensorflow \
+        && \
+
+# ==================================================================
+# theano
+# ------------------------------------------------------------------
+
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        libblas-dev \
+        && \
+
+    $PIP_INSTALL \
+        https://github.com/Theano/Theano/archive/master.zip \
+        && \
+
+# ==================================================================
+# jupyterlab
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        jupyterlab \
+        && \
+
+# ==================================================================
+# keras
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        h5py \
+        keras \
+        && \
+
+# ==================================================================
+# lasagne
+# ------------------------------------------------------------------
+
+    $GIT_CLONE https://github.com/Lasagne/Lasagne ~/lasagne && \
+    cd ~/lasagne && \
+    $PIP_INSTALL \
+        . && \
+
+# ==================================================================
+# opencv
+# ------------------------------------------------------------------
+
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        libatlas-base-dev \
+        libgflags-dev \
+        libgoogle-glog-dev \
+        libhdf5-serial-dev \
+        libleveldb-dev \
+        liblmdb-dev \
+        libprotobuf-dev \
+        libsnappy-dev \
+        protobuf-compiler \
+        && \
+
+    $GIT_CLONE --branch 4.5.1 https://github.com/opencv/opencv ~/opencv && \
+    mkdir -p ~/opencv/build && cd ~/opencv/build && \
+    cmake -D CMAKE_BUILD_TYPE=RELEASE \
+          -D CMAKE_INSTALL_PREFIX=/usr/local \
+          -D WITH_IPP=OFF \
+          -D WITH_CUDA=OFF \
+          -D WITH_OPENCL=OFF \
+          -D BUILD_TESTS=OFF \
+          -D BUILD_PERF_TESTS=OFF \
+          -D BUILD_DOCS=OFF \
+          -D BUILD_EXAMPLES=OFF \
+          .. && \
+    make -j"$(nproc)" install && \
+    ln -s /usr/local/include/opencv4/opencv2 /usr/local/include/opencv2 && \
+
+# ==================================================================
+# sonnet
+# ------------------------------------------------------------------
+
+    $PIP_INSTALL \
+        tensorflow_probability \
+        "dm-sonnet>=2.0.0b0" --pre \
+        && \
+
+# ==================================================================
+# caffe
+# ------------------------------------------------------------------
+
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        caffe-cpu \
+        && \
+# ==================================================================
+# cntk
+# ------------------------------------------------------------------
+
+    DEBIAN_FRONTEND=noninteractive $APT_INSTALL \
+        openmpi-bin \
+        libpng-dev \
+        libjpeg-dev \
+        libtiff-dev \
+        && \
+
+    # Fix ImportError for CNTK
+    ln -s /usr/lib/x86_64-linux-gnu/libmpi_cxx.so.20 /usr/lib/x86_64-linux-gnu/libmpi_cxx.so.1 && \
+    ln -s /usr/lib/x86_64-linux-gnu/libmpi.so.20.10.1 /usr/lib/x86_64-linux-gnu/libmpi.so.12 && \
+
+    wget --no-verbose -O - https://github.com/01org/mkl-dnn/releases/download/v0.14/mklml_lnx_2018.0.3.20180406.tgz | tar -xzf - && \
+    cp mklml*/* /usr/local -r && \
+
+    wget --no-verbose -O - https://github.com/01org/mkl-dnn/archive/v0.14.tar.gz | tar -xzf - && \
+    cd *-0.14 && mkdir build && cd build && \
+    ln -s /usr/local external && \
+    cmake -D CMAKE_BUILD_TYPE=RELEASE \
+          -D CMAKE_INSTALL_PREFIX=/usr/local \
+          .. && \
+    make -j"$(nproc)" install && \
+
+    $PIP_INSTALL \
+        cntk \
+        && \
+
+# ==================================================================
+# config & cleanup
+# ------------------------------------------------------------------
+
+    ldconfig && \
+    apt-get clean && \
+    apt-get autoremove && \
+    rm -rf /var/lib/apt/lists/* /tmp/* ~/*
+
+RUN APT_INSTALL="apt-get install -y --no-install-recommends" && \
+    PIP_INSTALL="python -m pip --no-cache-dir install --upgrade" && \
+    GIT_CLONE="git clone --depth 10" && \
+	$PIP_INSTALL \
+		Biopython
+
+EXPOSE 8888 6006
